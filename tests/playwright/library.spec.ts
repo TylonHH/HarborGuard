@@ -277,6 +277,11 @@ test.describe("Vulnerabilities library — mocked", () => {
 
   test("View Details row action opens nvd.nist.gov in new tab", async ({ page, context }) => {
     const vuln = makeVuln({ cveId: "CVE-2098-NEWTAB" })
+    // Keep the assertion on the URL opened by our app. The live NVD site
+    // redirects CVE paths to lowercase, which is outside this test's scope.
+    await context.route("https://nvd.nist.gov/vuln/detail/**", (route) =>
+      route.fulfill({ status: 200, contentType: "text/html", body: "" }),
+    )
     await page.route("**/api/vulnerabilities**", async (route) => {
       await route.fulfill({
         status: 200,
@@ -300,6 +305,7 @@ test.describe("Vulnerabilities library — mocked", () => {
         .click({ force: true }),
     ])
     // The popup target URL must point at nvd.nist.gov for this CVE.
+    await popup.waitForLoadState("domcontentloaded")
     expect(popup.url()).toContain("nvd.nist.gov/vuln/detail/CVE-2098-NEWTAB")
     await popup.close()
   })
