@@ -227,6 +227,14 @@ retains its previous unauthenticated behavior, so protect public deployments
 with this option or an external access proxy. This feature controls access to
 the app; it does not encrypt registry credentials stored in the database.
 
+### Scheduled scans
+
+Enabled schedules with a cron expression are checked by the server every 30 seconds.
+Cron times use the container's local timezone (UTC by default). A schedule that
+became due while the server was stopped is started once after restart. Existing
+scan records left pending by an earlier server restart are not replayed; trigger
+those scans again from the dashboard after checking their status.
+
 ### Webhook Notifier Payload
 
 When `WEBHOOK_NOTIFIER_URL` is set, Harbor Guard POSTs JSON to that URL after each successful scan whenever the scan introduces vulnerabilities not present in the most recent prior completed scan of the same `image:tag`. With no prior scan, every current finding is reported as new. By default no request is sent when there is no diff; set `WEBHOOK_NOTIFIER_ALL_VULNS=true` to receive a payload on every scan.

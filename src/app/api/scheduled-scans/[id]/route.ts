@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { apiError } from '@/lib/api/api-utils'
+import { nextScheduledRun } from '@/lib/scheduled-scans/cron'
 
 const UpdateScheduledScanSchema = z.object({
   name: z.string().min(1).max(255).optional(),
@@ -137,14 +138,15 @@ export async function PUT(
     if (imageSelectionMode !== undefined) updateData.imageSelectionMode = imageSelectionMode
     if (imagePattern !== undefined) updateData.imagePattern = imagePattern
 
-    // Calculate next run time if schedule changed and enabled
-    if (schedule !== undefined && enabled) {
-      // TODO: Implement proper cron parsing
-      const nextRunAt = new Date()
-      nextRunAt.setDate(nextRunAt.getDate() + 1)
-      updateData.nextRunAt = nextRunAt
-    } else if (!enabled) {
-      updateData.nextRunAt = null
+    if (schedule !== undefined || enabled !== undefined) {
+      const effectiveSchedule = schedule ?? existingScan.schedule
+      try {
+        updateData.nextRunAt = (enabled ?? existingScan.enabled) && effectiveSchedule
+          ? nextScheduledRun(effectiveSchedule)
+          : null
+      } catch {
+        return NextResponse.json({ error: 'Invalid cron schedule' }, { status: 400 })
+      }
     }
 
     // Handle image selection updates

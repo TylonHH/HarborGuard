@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { apiError } from '@/lib/api/api-utils'
+import { nextScheduledRun } from '@/lib/scheduled-scans/cron'
 
 export async function GET(request: NextRequest) {
   try {
@@ -154,13 +155,14 @@ export async function POST(request: NextRequest) {
       }))
     }
 
-    // Calculate next run time if schedule is provided
     let nextRunAt = null
-    if (schedule && enabled) {
-      // TODO: Implement cron parsing to calculate next run time
-      // For now, just set it to tomorrow
-      nextRunAt = new Date()
-      nextRunAt.setDate(nextRunAt.getDate() + 1)
+    if (schedule) {
+      try {
+        const next = nextScheduledRun(schedule)
+        nextRunAt = enabled ? next : null
+      } catch {
+        return NextResponse.json({ error: 'Invalid cron schedule' }, { status: 400 })
+      }
     }
 
     // Create the scheduled scan

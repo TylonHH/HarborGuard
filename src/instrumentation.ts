@@ -4,6 +4,8 @@ export async function register() {
     scheduleAutoCleanup();
     await bootstrapAgentKey();
     await initializeDemoMode();
+    const { startScheduledScanRunner } = await import('./lib/scheduled-scans/scheduler');
+    startScheduledScanRunner();
   }
 }
 

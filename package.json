@@ -11,7 +11,7 @@
     "start": "node scripts/init-database.js && next start -p ${PORT:-3000}",
     "start:dev": "next start",
     "lint": "next lint",
-    "test": "node --import tsx --test src/lib/notifiers/*.test.ts",
+    "test": "node --import tsx --test src/lib/notifiers/*.test.ts src/lib/scheduled-scans/*.test.ts",
     "test:build": "npx prisma generate && npx tsc --noEmit",
     "prebuild": "npx prisma generate",
     "db:init": "node scripts/init-database.js",
