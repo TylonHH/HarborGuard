@@ -5,6 +5,7 @@ import { scannerService } from '@/lib/scanner'
 import { apiError } from '@/lib/api/api-utils'
 import { config } from '@/lib/config'
 import { logger } from '@/lib/logger'
+import { RegistryService } from '@/lib/registry/RegistryService'
 
 export async function executeScheduledScan(id: string, triggerSource: 'MANUAL' | 'SCHEDULED' = 'MANUAL') {
   try {
@@ -74,6 +75,44 @@ export async function executeScheduledScan(id: string, triggerSource: 'MANUAL' |
             primaryRepositoryId: true
           }
         })
+        // Registry sync caches package metadata, but does not create Image rows.
+        // Include published GHCR packages so a new image can be scanned for the
+        // first time by a scheduled ALL run.
+        const ghcrRepositories = await prisma.repository.findMany({
+          where: { status: 'ACTIVE', type: 'GHCR' }
+        })
+        const registryService = new RegistryService(prisma)
+        const knownImages = new Set(imagesToScan.map(image =>
+          `${image.name.replace(/^ghcr\.io\//i, '').toLowerCase()}:${image.tag}`
+        ))
+
+        for (const repository of ghcrRepositories) {
+          let offset = 0
+          while (true) {
+            const packages = await registryService.listImages(repository.id, { limit: 100, offset })
+            for (const pkg of packages) {
+              try {
+                const tags = await registryService.getTags(repository.id, pkg.namespace, pkg.name)
+                if (!tags.some(tag => tag.name === 'latest')) continue
+
+                const key = `${pkg.fullName.toLowerCase()}:latest`
+                if (knownImages.has(key)) continue
+                knownImages.add(key)
+                imagesToScan.push({
+                  id: `registry:${repository.id}:${pkg.fullName}`,
+                  name: pkg.fullName,
+                  tag: 'latest',
+                  source: 'REGISTRY_PRIVATE',
+                  primaryRepositoryId: repository.id,
+                })
+              } catch (error) {
+                logger.warn(`[ScheduledScans] Could not list tags for ${pkg.fullName}: ${error}`)
+              }
+            }
+            if (packages.length < 100) break
+            offset += packages.length
+          }
+        }
         break
 
       case 'REPOSITORY':
@@ -180,7 +219,7 @@ async function startScanExecution(historyId: string, images: any[]) {
       // Trigger actual scan using the scanner service
       // Map LOCAL_DOCKER to 'local' for the scanner service
       const source = image.source === 'LOCAL_DOCKER' ? 'local' :
-                     image.source === 'REGISTRY' ? 'registry' :
+                     image.source === 'REGISTRY' || image.source === 'REGISTRY_PRIVATE' ? 'registry' :
                      image.source || 'registry'
 
       const scanRequest = {
@@ -203,6 +242,7 @@ async function startScanExecution(historyId: string, images: any[]) {
           await prisma.scheduledScanResult.update({
             where: { id: result.id },
             data: {
+              imageId: scan.imageId,
               scanId: scan.id,
               status: 'RUNNING'
             }
