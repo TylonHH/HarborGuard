@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { apiError } from '@/lib/api/api-utils'
-import { nextScheduledRun } from '@/lib/scheduled-scans/cron'
+import { isValidSchedule, nextScheduledRun } from '@/lib/scheduled-scans/cron'
 
 export async function GET(request: NextRequest) {
   try {
@@ -63,7 +63,10 @@ export async function GET(request: NextRequest) {
     ])
 
     return NextResponse.json({
-      scheduledScans,
+      scheduledScans: scheduledScans.map(scan => ({
+        ...scan,
+        scheduleError: scan.schedule && !isValidSchedule(scan.schedule) ? 'Invalid cron expression' : null,
+      })),
       pagination: {
         total,
         limit,
@@ -161,7 +164,7 @@ export async function POST(request: NextRequest) {
         const next = nextScheduledRun(schedule)
         nextRunAt = enabled ? next : null
       } catch {
-        return NextResponse.json({ error: 'Invalid cron schedule' }, { status: 400 })
+        return NextResponse.json({ error: 'Invalid cron expression. Use five fields, e.g. 0 2 * * * (02:00 UTC), not Quartz syntax with ? or a year.' }, { status: 400 })
       }
     }
 

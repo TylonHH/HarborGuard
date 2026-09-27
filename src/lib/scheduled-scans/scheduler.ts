@@ -1,12 +1,13 @@
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
-import { nextScheduledRun } from './cron';
+import { isValidSchedule, nextScheduledRun } from './cron';
 
 declare global {
   var __harborguard_scheduled_scan_timer: ReturnType<typeof setInterval> | undefined;
 }
 
 let checking = false;
+const invalidSchedules = new Map<string, string>();
 
 async function checkSchedules() {
   if (checking) return;
@@ -20,6 +21,14 @@ async function checkSchedules() {
 
     for (const schedule of schedules) {
       if (!schedule.schedule) continue;
+      if (!isValidSchedule(schedule.schedule)) {
+        if (invalidSchedules.get(schedule.id) !== schedule.schedule) {
+          logger.error(`[ScheduledScans] ${schedule.id}: invalid cron expression ${JSON.stringify(schedule.schedule)}; edit the schedule using five fields, e.g. "0 2 * * *" (UTC). Automatic runs are skipped until corrected.`);
+          invalidSchedules.set(schedule.id, schedule.schedule);
+        }
+        continue;
+      }
+      invalidSchedules.delete(schedule.id);
       try {
         if (!schedule.nextRunAt) {
           await prisma.scheduledScan.update({

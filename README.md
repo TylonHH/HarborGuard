@@ -234,6 +234,10 @@ Cron times use the container's local timezone (UTC by default). A schedule that
 became due while the server was stopped is started once after restart. Existing
 scan records left pending by an earlier server restart are not replayed; trigger
 those scans again from the dashboard after checking their status.
+Use five-field cron expressions such as `0 2 * * *` for 02:00 UTC daily.
+Quartz expressions containing `?` or a year field are not supported. Older
+invalid schedules appear as such in the dashboard and must be edited; they are
+skipped by the scheduler rather than retried every 30 seconds.
 
 ### Webhook Notifier Payload
 

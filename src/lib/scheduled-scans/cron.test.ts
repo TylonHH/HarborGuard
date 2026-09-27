@@ -12,5 +12,6 @@ describe('scheduled scan cron', () => {
 
   it('rejects malformed expressions before saving a schedule', () => {
     assert.throws(() => nextScheduledRun('not a cron expression'), /Invalid cron schedule/);
+    assert.throws(() => nextScheduledRun('0 0 2 * * ? *'), /Invalid cron schedule/);
   });
 });

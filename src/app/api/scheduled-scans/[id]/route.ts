@@ -145,7 +145,7 @@ export async function PUT(
           ? nextScheduledRun(effectiveSchedule)
           : null
       } catch {
-        return NextResponse.json({ error: 'Invalid cron schedule' }, { status: 400 })
+        return NextResponse.json({ error: 'Invalid cron expression. Use five fields, e.g. 0 2 * * * (02:00 UTC), not Quartz syntax with ? or a year.' }, { status: 400 })
       }
     }
 

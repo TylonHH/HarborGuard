@@ -41,6 +41,7 @@ interface ScheduledScan {
   name: string;
   description?: string;
   schedule?: string;
+  scheduleError?: string | null;
   enabled: boolean;
   nextRunAt?: string;
   lastRunAt?: string;
@@ -224,9 +225,14 @@ export default function ScheduledScansPage() {
     {
       key: "schedule",
       header: "Schedule",
-      type: "text",
+      type: "custom",
       cellProps: {
-        value: (row: any) => row.schedule || "Manual",
+        render: (row: ScheduledScan) => (
+          <div className="flex items-center gap-2">
+            <span>{row.schedule || "Manual"}</span>
+            {row.scheduleError && <Badge variant="destructive" className="rounded-none">Invalid cron – edit schedule</Badge>}
+          </div>
+        ),
       },
     },
     {
@@ -443,7 +449,8 @@ export default function ScheduledScansPage() {
                     });
 
                     if (!response.ok) {
-                      throw new Error("Failed to save scheduled scan");
+                      const payload = await response.json().catch(() => ({}));
+                      throw new Error(payload.error || "Failed to save scheduled scan");
                     }
 
                     toast.success(
@@ -456,7 +463,7 @@ export default function ScheduledScansPage() {
                     fetchScheduledScans();
                   } catch (error) {
                     console.error("Error saving scheduled scan:", error);
-                    toast.error("Failed to save scheduled scan");
+                    toast.error(error instanceof Error ? error.message : "Failed to save scheduled scan");
                   }
                 }}
                 onCancel={() => {

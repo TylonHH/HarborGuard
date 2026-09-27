@@ -23,14 +23,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Search, X, ExternalLink } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { toast } from "sonner";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 interface ScheduleScanFormProps {
   scan?: any;
@@ -184,26 +178,7 @@ export function ScheduleScanForm({
         </div>
 
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Label htmlFor="schedule" className="text-caption uppercase tracking-widest text-muted-foreground/60">Schedule (Cron Expression)</Label>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <a
-                    href="http://www.cronmaker.com/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-muted-foreground/40 hover:text-accent"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>http://www.cronmaker.com/</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
+          <Label htmlFor="schedule" className="text-caption uppercase tracking-widest text-muted-foreground/60">Schedule (Cron Expression)</Label>
           <Input
             id="schedule"
             value={formData.schedule}
@@ -214,7 +189,7 @@ export function ScheduleScanForm({
             className="rounded-none border-white/10 bg-transparent text-body-sm"
           />
           <p className="text-caption uppercase tracking-widest text-muted-foreground/40 mt-1">
-            Leave empty for manual execution only
+            Five fields: minute hour day month weekday (UTC by default). Example: 0 2 * * * = daily at 02:00 UTC. Quartz expressions with ? or a year are not supported. Leave empty for manual execution only.
           </p>
         </div>
       </div>
