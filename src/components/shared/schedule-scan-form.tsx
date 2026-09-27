@@ -59,9 +59,18 @@ export function ScheduleScanForm({
   const fetchAvailableImages = async () => {
     try {
       setLoadingImages(true);
-      const response = await fetch("/api/images?limit=100");
-      const data = await response.json();
-      setAvailableImages(data.images || []);
+      const images: any[] = [];
+      let offset = 0;
+      while (true) {
+        const response = await fetch(`/api/images?limit=100&offset=${offset}`);
+        if (!response.ok) throw new Error(`Failed to load images: HTTP ${response.status}`);
+        const data = await response.json();
+        const page = data.images || [];
+        images.push(...page);
+        if (!data.pagination?.hasMore || page.length === 0) break;
+        offset += page.length;
+      }
+      setAvailableImages(images);
     } catch (error) {
       console.error("Error fetching images:", error);
       toast.error("Failed to load available images");

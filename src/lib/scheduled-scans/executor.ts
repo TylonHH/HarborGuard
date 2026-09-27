@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma'
 import { randomUUID } from 'crypto'
 import { scannerService } from '@/lib/scanner'
 import { apiError } from '@/lib/api/api-utils'
+import { config } from '@/lib/config'
+import { logger } from '@/lib/logger'
 
 export async function executeScheduledScan(id: string, triggerSource: 'MANUAL' | 'SCHEDULED' = 'MANUAL') {
   try {
@@ -89,6 +91,8 @@ export async function executeScheduledScan(id: string, triggerSource: 'MANUAL' |
       )
     }
 
+    logger.info(`[ScheduledScans] ${id}: selected ${imagesToScan.length} images using ${scheduledScan.imageSelectionMode}`)
+
     // Create execution history record
     const executionId = randomUUID()
     const history = await prisma.scheduledScanHistory.create({
@@ -148,12 +152,13 @@ async function startScanExecution(historyId: string, images: any[]) {
     }
   })
 
-  let scannedCount = 0
+  let queuedCount = 0
   let failedCount = 0
   const scanResults = []
 
   // Process each image
   for (const image of images) {
+    let resultId: string | undefined
     try {
       // Create a scheduled scan result record
       const result = await prisma.scheduledScanResult.create({
@@ -170,6 +175,7 @@ async function startScanExecution(historyId: string, images: any[]) {
           startedAt: new Date()
         }
       })
+      resultId = result.id
 
       // Trigger actual scan using the scanner service
       // Map LOCAL_DOCKER to 'local' for the scanner service
@@ -202,9 +208,11 @@ async function startScanExecution(historyId: string, images: any[]) {
             }
           })
           scanResults.push({ resultId: result.id, scanId: scan.id })
+        } else {
+          throw new Error(`Scan record not found for request ${scanResponse.requestId}`)
         }
 
-        scannedCount++
+        queuedCount++
       } else {
         // Scan failed to start
         await prisma.scheduledScanResult.update({
@@ -222,7 +230,8 @@ async function startScanExecution(historyId: string, images: any[]) {
       await prisma.scheduledScanHistory.update({
         where: { id: historyId },
         data: {
-          scannedImages: scannedCount,
+          // Queued scans are not completed scans.
+          scannedImages: failedCount,
           failedImages: failedCount
         }
       })
@@ -230,11 +239,22 @@ async function startScanExecution(historyId: string, images: any[]) {
     } catch (error) {
       console.error(`Error scanning image ${image.name}:${image.tag}:`, error)
       failedCount++
+      if (resultId) {
+        await prisma.scheduledScanResult.update({
+          where: { id: resultId },
+          data: {
+            status: 'FAILED',
+            completedAt: new Date(),
+            errorMessage: error instanceof Error ? error.message : String(error),
+          }
+        })
+      }
 
       // Update failed count
       await prisma.scheduledScanHistory.update({
         where: { id: historyId },
         data: {
+          scannedImages: failedCount,
           failedImages: failedCount
         }
       })
@@ -242,26 +262,34 @@ async function startScanExecution(historyId: string, images: any[]) {
   }
 
   // Start monitoring scan completions
-  monitorScanCompletion(historyId, scanResults).catch(console.error)
-
   // Update execution status based on initial results
   await prisma.scheduledScanHistory.update({
     where: { id: historyId },
     data: {
-      status: failedCount === images.length ? 'FAILED' :
-             scannedCount === 0 ? 'FAILED' : 'RUNNING',
-      scannedImages: scannedCount,
+      status: queuedCount === 0 ? 'FAILED' : 'RUNNING',
+      completedAt: queuedCount === 0 ? new Date() : null,
+      scannedImages: failedCount,
       failedImages: failedCount
     }
   })
+
+  if (scanResults.length > 0) {
+    monitorScanCompletion(historyId, scanResults, failedCount).catch(console.error)
+  }
 }
 
-async function monitorScanCompletion(historyId: string, scanResults: any[]) {
-  // Poll for scan completion (in production, use webhooks or queue)
-  const maxAttempts = 180 // 15 minutes with 5-second intervals
+async function monitorScanCompletion(historyId: string, scanResults: any[], initialFailedCount: number) {
+  // Allow every queued scan its configured timeout, accounting for concurrency.
+  const intervalMs = 10_000
+  const timeoutMinutes = Math.max(15,
+    Math.ceil(scanResults.length / Math.max(1, config.maxConcurrentScans)) * config.scanTimeoutMinutes + 5)
+  const maxAttempts = Math.ceil(timeoutMinutes * 60_000 / intervalMs)
   let attempts = 0
+  let checking = false
 
   const checkInterval = setInterval(async () => {
+    if (checking) return
+    checking = true
     attempts++
 
     try {
@@ -269,6 +297,7 @@ async function monitorScanCompletion(historyId: string, scanResults: any[]) {
       let allCompleted = true
       let completedCount = 0
       let failedCount = 0
+      let partialCount = 0
 
       for (const { resultId, scanId } of scanResults) {
         const scan = await prisma.scan.findUnique({
@@ -286,62 +315,86 @@ async function monitorScanCompletion(historyId: string, scanResults: any[]) {
         })
 
         if (scan) {
-          if (scan.status === 'SUCCESS' || scan.status === 'FAILED') {
+          if (scan.status === 'SUCCESS' || scan.status === 'PARTIAL' || scan.status === 'FAILED' || scan.status === 'CANCELLED') {
             // Update scheduled scan result status (vulnerability data is referenced from the scan)
             await prisma.scheduledScanResult.update({
               where: { id: resultId },
               data: {
-                status: scan.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED',
+                status: scan.status,
                 completedAt: new Date(),
-                errorMessage: scan.status === 'FAILED' ? 'Scan failed' : null
+                errorMessage: scan.status === 'FAILED' || scan.status === 'CANCELLED' ? `Scan ${scan.status.toLowerCase()}` : null
               }
             })
 
             if (scan.status === 'SUCCESS') {
               completedCount++
+            } else if (scan.status === 'PARTIAL') {
+              partialCount++
             } else {
               failedCount++
             }
           } else {
             allCompleted = false
           }
+        } else {
+          allCompleted = false
         }
       }
+
+      await prisma.scheduledScanHistory.update({
+        where: { id: historyId },
+        data: {
+          scannedImages: initialFailedCount + completedCount + partialCount + failedCount,
+          failedImages: initialFailedCount + failedCount,
+        }
+      })
 
       if (allCompleted || attempts >= maxAttempts) {
         clearInterval(checkInterval)
 
         // Get final counts
+        if (attempts >= maxAttempts && !allCompleted) {
+          await prisma.scheduledScanResult.updateMany({
+            where: { scheduledScanHistoryId: historyId, status: { in: ['PENDING', 'RUNNING'] } },
+            data: { status: 'FAILED', completedAt: new Date(), errorMessage: `Scan monitoring timeout after ${timeoutMinutes} minutes` }
+          })
+        }
+
         const history = await prisma.scheduledScanHistory.findUnique({
           where: { id: historyId },
           include: {
             scanResults: {
-              where: { status: { in: ['SUCCESS', 'FAILED'] } }
+              where: { status: { in: ['SUCCESS', 'PARTIAL', 'FAILED', 'CANCELLED'] } }
             }
           }
         })
 
         const successCount = history?.scanResults.filter(r => r.status === 'SUCCESS').length || 0
-        const totalFailedCount = history?.scanResults.filter(r => r.status === 'FAILED').length || 0
+        const partialCount = history?.scanResults.filter(r => r.status === 'PARTIAL').length || 0
+        const recordedFailedCount = history?.scanResults.filter(r => r.status === 'FAILED' || r.status === 'CANCELLED').length || 0
         const totalImages = history?.totalImages || 0
+        const unrecordedFailedCount = Math.max(0, totalImages - (history?.scanResults.length || 0))
+        const totalFailedCount = recordedFailedCount + unrecordedFailedCount
 
         // Update final status
         await prisma.scheduledScanHistory.update({
           where: { id: historyId },
           data: {
-            status: attempts >= maxAttempts ? 'FAILED' :
+            status: attempts >= maxAttempts && !allCompleted ? 'FAILED' :
                    totalFailedCount === totalImages ? 'FAILED' :
-                   totalFailedCount > 0 ? 'PARTIAL' : 'COMPLETED',
+                   totalFailedCount > 0 || partialCount > 0 ? 'PARTIAL' : 'COMPLETED',
             completedAt: new Date(),
-            scannedImages: successCount,
+            scannedImages: successCount + partialCount + totalFailedCount,
             failedImages: totalFailedCount,
-            errorMessage: attempts >= maxAttempts ? 'Scan monitoring timeout after 15 minutes' : null
+            errorMessage: attempts >= maxAttempts && !allCompleted ? `Scan monitoring timeout after ${timeoutMinutes} minutes` : null
           }
         })
       }
     } catch (error) {
       console.error('Error monitoring scan completion:', error)
       clearInterval(checkInterval)
+    } finally {
+      checking = false
     }
-  }, 5000) // Check every 5 seconds
+  }, intervalMs)
 }
